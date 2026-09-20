@@ -14,10 +14,63 @@
 <script>
 const ratingKeys=['Passing','Shooting','Dribbling','Physical','Work Rate','Tackling','Composure','Pace'];let players=[];
 let db;
+const SUPABASE_URL='https://omccwmvrvfptyoczjalu.supabase.co';
+const SUPABASE_KEY='sb_publishable_w7hsJ82IHoUK0c_IkWfCjg_DnxciJx-';
+const CLOUD_TABLE='scouting_players';
+const cloudHeaders={'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY,'Content-Type':'application/json'};
+
 function openDB(){return new Promise((resolve,reject)=>{let req=indexedDB.open('SaudiD2ScoutingHub',1);req.onupgradeneeded=e=>{let d=e.target.result;if(!d.objectStoreNames.contains('players'))d.createObjectStore('players',{keyPath:'id'})};req.onsuccess=e=>{db=e.target.result;resolve(db)};req.onerror=()=>reject(req.error)})}
-function loadPlayers(){return new Promise((resolve,reject)=>{let tx=db.transaction('players','readonly'),req=tx.objectStore('players').getAll();req.onsuccess=()=>{players=req.result||[];renderAll();resolve()};req.onerror=()=>reject(req.error)})}
-function saveRecord(p){return new Promise((resolve,reject)=>{let tx=db.transaction('players','readwrite');tx.objectStore('players').put(p);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}
-function deleteRecord(id){return new Promise((resolve,reject)=>{let tx=db.transaction('players','readwrite');tx.objectStore('players').delete(id);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}
+
+function localGetAll(){return new Promise((resolve,reject)=>{let tx=db.transaction('players','readonly'),req=tx.objectStore('players').getAll();req.onsuccess=()=>resolve(req.result||[]);req.onerror=()=>reject(req.error)})}
+function localSave(p){return new Promise((resolve,reject)=>{let tx=db.transaction('players','readwrite');tx.objectStore('players').put(p);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}
+function localDelete(id){return new Promise((resolve,reject)=>{let tx=db.transaction('players','readwrite');tx.objectStore('players').delete(id);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}
+
+async function cloudList(){
+  const r=await fetch(`${SUPABASE_URL}/rest/v1/${CLOUD_TABLE}?select=id,data&order=id.asc`,{headers:cloudHeaders});
+  if(!r.ok) throw new Error('Cloud load failed: '+r.status);
+  const rows=await r.json();
+  return rows.map(x=>Object.assign({},x.data||{},{id:x.id}));
+}
+async function cloudUpsert(p){
+  const r=await fetch(`${SUPABASE_URL}/rest/v1/${CLOUD_TABLE}?on_conflict=id`,{
+    method:'POST',
+    headers:{...cloudHeaders,'Prefer':'resolution=merge-duplicates,return=minimal'},
+    body:JSON.stringify([{id:p.id,data:p}])
+  });
+  if(!r.ok) throw new Error('Cloud save failed: '+r.status+' '+await r.text());
+}
+async function cloudDelete(id){
+  const r=await fetch(`${SUPABASE_URL}/rest/v1/${CLOUD_TABLE}?id=eq.${encodeURIComponent(id)}`,{method:'DELETE',headers:cloudHeaders});
+  if(!r.ok) throw new Error('Cloud delete failed: '+r.status+' '+await r.text());
+}
+
+async function loadPlayers(){
+  try{
+    let cloud=await cloudList();
+    const local=await localGetAll();
+    if(local.length){
+      const cloudIds=new Set(cloud.map(p=>String(p.id)));
+      const missing=local.filter(p=>!cloudIds.has(String(p.id)));
+      for(const p of missing) await cloudUpsert(p);
+      if(missing.length) cloud=await cloudList();
+    }
+    players=cloud;
+    for(const p of players) await localSave(p);
+  }catch(e){
+    console.error('Cloud unavailable, using local cache',e);
+    players=await localGetAll();
+  }
+  renderAll();
+}
+async function saveRecord(p){
+  await cloudUpsert(p);
+  await localSave(p);
+}
+async function deleteRecord(id){
+  await cloudDelete(id);
+  await localDelete(id);
+}
+)}
 async function persist(p){if(p)await saveRecord(p);renderAll()}
 function fd(id){return document.getElementById(id)}function fileData(f){return new Promise(r=>{if(!f)return r('');let x=new FileReader();x.onload=()=>r(x.result);x.readAsDataURL(f)})}
 ratingKeys.forEach(k=>ratings.insertAdjacentHTML('beforeend',`<div class="rangebox"><div><span>${k}</span><b id="${k}Out">5</b></div><input id="r${k}" type="range" min="1" max="10" value="5" oninput="fd('${k}Out').textContent=this.value"></div>`));
@@ -50,5 +103,5 @@ function closeProfile(){profileModal.classList.remove('show')}function editPlaye
 function renderCompare(){let ps=[0,1,2,3].map(i=>players.find(p=>String(p.id)===fd('cp'+i).value)).filter(Boolean);compareGrid.innerHTML=ps.map(p=>`<div class="panel cmp"><h3>${esc(p.name)}</h3><div class="meta">${esc(p.club)} • ${esc(p.position)}</div><h2 style="color:var(--gold)">${esc(p.overall||'-')}</h2>${ratingKeys.map(k=>`<div class="barrow" style="grid-template-columns:75px 1fr 25px"><span>${k}</span><div class="bar"><i style="width:${(p.ratings?.[k]||0)*10}%"></i></div><b>${p.ratings?.[k]||'-'}</b></div>`).join('')}</div>`).join('')}
 function exportCSV(){let h=['Name','Club','Position','DOB','Nationality','Height','Weight','Foot','Market Value','Season','Matches Played','Started','Substitute','Minutes','Goals','Assists','Yellow Cards','Red Cards','Overall','Shortlisted','YouTube','Transfermarkt','Instagram','Facebook','Analysis URL','Notes',...ratingKeys];let rows=players.map(p=>[p.name,p.club,p.position,p.dob,p.nationality,p.height,p.weight,p.foot,p.value,p.season,p.matches,p.started,p.substitute,p.minutes,p.goals,p.assists,p.yellow,p.red,p.overall,p.shortlisted,p.youtube,p.transfermarkt,p.instagram,p.facebook,p.analysisUrl,p.notes,...ratingKeys.map(k=>p.ratings?.[k]||'')]);let q=v=>'"'+String(v??'').replaceAll('"','""')+'"';let csv='\ufeff'+[h,...rows].map(r=>r.map(q).join(',')).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='Saudi_D2_Scouting_Database.csv';a.click()}
 function importCSV(f){if(!f)return;alert('Import is reserved for the cloud version. Export is fully enabled in this prototype.')}
-openDB().then(loadPlayers).catch(e=>{console.error(e);alert('Storage could not be opened in this browser.');renderAll()});
+openDB().then(loadPlayers).catch(e=>{console.error(e);alert('Could not open local cache.');renderAll()});
 </script></body></html>
