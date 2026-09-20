@@ -70,7 +70,6 @@ async function deleteRecord(id){
   await cloudDelete(id);
   await localDelete(id);
 }
-)}
 async function persist(p){if(p)await saveRecord(p);renderAll()}
 function fd(id){return document.getElementById(id)}function fileData(f){return new Promise(r=>{if(!f)return r('');let x=new FileReader();x.onload=()=>r(x.result);x.readAsDataURL(f)})}
 ratingKeys.forEach(k=>ratings.insertAdjacentHTML('beforeend',`<div class="rangebox"><div><span>${k}</span><b id="${k}Out">5</b></div><input id="r${k}" type="range" min="1" max="10" value="5" oninput="fd('${k}Out').textContent=this.value"></div>`));
